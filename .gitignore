@@ -1,0 +1,23 @@
+﻿################################################################################
+# This .gitignore file was automatically created by Microsoft(R) Visual Studio.
+################################################################################
+
+/CHDRestore/Debug/vc140.pdb
+/CHDRestore/Debug/vc140.idb
+/CHDRestore/Debug/stdafx.obj
+/CHDRestore/Debug/StatusFileManager.obj
+/CHDRestore/Debug/FileManagement.obj
+/CHDRestore/Debug/ErrorHandling.obj
+/CHDRestore/Debug/CHDRestore.pch
+/CHDRestore/Debug/CHDRestore.obj
+/CHDRestore/Debug/CHDRestore.log
+/CHDRestore/Debug/CHDRestore.tlog/link.write.1.tlog
+/CHDRestore/Debug/CHDRestore.tlog/link.read.1.tlog
+/CHDRestore/Debug/CHDRestore.tlog/link.command.1.tlog
+/CHDRestore/Debug/CHDRestore.tlog/CL.write.1.tlog
+/CHDRestore/Debug/CHDRestore.tlog/CL.read.1.tlog
+/CHDRestore/Debug/CHDRestore.tlog/CL.command.1.tlog
+/CHDRestore/Debug/CHDRestore.tlog/CHDRestore.lastbuildstate
+/Debug/CHDRestore.pdb
+/Debug/CHDRestore.ilk
+/Debug/CHDRestore.exe
