@@ -38,3 +38,4 @@ typedef struct {
 int FindFilesInDirectory(const _TCHAR* path, std::list<FileDataStruct> &fileList);
 DWORD GetVolumeInfo(VolumeInfoStruct* volumeInfo);
 BOOL IsPathModifier(FileDataStruct* data1);
+BOOL IsPathModifier(_TCHAR* filename);

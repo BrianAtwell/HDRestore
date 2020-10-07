@@ -48,7 +48,11 @@ DWORD WINAPI FindFileThreadedFunction(LPVOID lpParam) {
 		threadData->hFind = FindFirstFile(threadData->szDir, &threadData->ffd);
 		if (INVALID_HANDLE_VALUE == threadData->hFind)
 		{
-			threadData->retVal = printError(TEXT("FindFileThreadedFunction:FindFirstFile"));
+			threadData->retVal = GetLastError();
+			if (threadData->retVal != ERROR_NO_MORE_FILES)
+			{
+				printError(TEXT("FindFileThreadedFunction:FindFirstFile"), threadData->retVal);
+			}
 			return threadData->retVal;
 		}
 		else
@@ -63,7 +67,11 @@ DWORD WINAPI FindFileThreadedFunction(LPVOID lpParam) {
 
 		if (threadData->retVal == 0)
 		{
-			threadData->retVal = printError(TEXT("FindFileThreadedFunction:FindFirstFile"));
+			threadData->retVal = GetLastError();
+			if (threadData->retVal != ERROR_NO_MORE_FILES)
+			{
+				printError(TEXT("FindFileThreadedFunction:FindFirstFile"), threadData->retVal);
+			}
 			return threadData->retVal;
 		}
 		else 
@@ -160,7 +168,7 @@ DWORD FindFileThreadHandler(PFindFileThreadStruct pThreadData) {
 
 	if (hasThreadCompleted)
 	{
-		_tprintf(_T("FindFileThreadHandler:Thread completed in %d ms successfully\n"), timeTakenMs);
+		//_tprintf(_T("FindFileThreadHandler:Thread completed in %d ms successfully\n"), timeTakenMs);
 		return 0;
 	}
 
@@ -200,7 +208,7 @@ int FindFilesInDirectory(const _TCHAR* path,  std::list<FileDataStruct> &fileLis
 		return (-1);
 	}
 
-	_tprintf(TEXT("\nTarget directory is %s\n\n"), path);
+	//_tprintf(TEXT("\nTarget directory is %s\n\n"), path);
 
 	// Prepare string for use with FindFile functions.  First, copy the
 	// string to a buffer, then append '\*' to the directory name.
@@ -225,21 +233,22 @@ int FindFilesInDirectory(const _TCHAR* path,  std::list<FileDataStruct> &fileLis
 	do
 	{
 		FileDataStruct data;
-		StringCchCopy(data.filePath, MAX_PATH, pThreadData->ffd.cFileName);
-		if (pThreadData->ffd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+		//StringCchCopy(data.filePath, MAX_PATH, pThreadData->ffd.cFileName);
+		if (!IsPathModifier(pThreadData->ffd.cFileName))
 		{
-			data.fileType = FILETYPEDIRECTORY;
-			_tprintf(TEXT("  %s   <DIR>\n"), pThreadData->ffd.cFileName);
-		}
-		else
-		{
-			data.fileType = FILETYPEFILE;
-			filesize.LowPart = pThreadData->ffd.nFileSizeLow;
-			filesize.HighPart = pThreadData->ffd.nFileSizeHigh;
-			_tprintf(TEXT("  %s   %ld bytes\n"), pThreadData->ffd.cFileName, filesize.QuadPart);
-		}
-		if(!IsPathModifier(&data))
-		{
+			StringCchPrintf(data.filePath, MAX_PATH, _T("%s\\%s"), path, pThreadData->ffd.cFileName);
+			if (pThreadData->ffd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+			{
+				data.fileType = FILETYPEDIRECTORY;
+				//_tprintf(TEXT("  %s   <DIR>\n"), pThreadData->ffd.cFileName);
+			}
+			else
+			{
+				data.fileType = FILETYPEFILE;
+				filesize.LowPart = pThreadData->ffd.nFileSizeLow;
+				filesize.HighPart = pThreadData->ffd.nFileSizeHigh;
+				//_tprintf(TEXT("  %s   %ld bytes\n"), pThreadData->ffd.cFileName, filesize.QuadPart);
+			}
 			fileList.push_back(data);
 		}
 		
@@ -408,6 +417,24 @@ BOOL IsPathModifier(FileDataStruct* data1)
 		{
 			return true;
 		}
+	}
+
+	return false;
+}
+
+/*
+* Description: Checks if it is "." or "..".
+*/
+BOOL IsPathModifier(_TCHAR* filename)
+{
+	if (_tcscmp(filename, _T(".")) == 0)
+	{
+		return true;
+	}
+
+	if (_tcscmp(filename, _T("..")) == 0)
+	{
+		return true;
 	}
 
 	return false;

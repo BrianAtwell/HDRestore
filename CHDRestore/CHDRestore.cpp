@@ -31,14 +31,39 @@ int _tmain(int argc, _TCHAR* argv[])
 
 		std::list<FileDataStruct> fileList;
 
-		std::list<FileDataStruct> directoryList;
+		std::list<FileDataStruct> curFileList;
 
 		FindFilesInDirectory(recoveryPath, fileList);
+
+		std::list<FileDataStruct>::iterator beforeInsert;
 
 		//directoryList.push_back(FileDataStruct(recoveryPath, FILETYPEDIRECTORY));
 		for (std::list<FileDataStruct>::iterator it = fileList.begin(); it != fileList.end(); ++it)
 		{
 			_tprintf(_T("%s: %s\n"), it->fileType == FILETYPEFILE ? _T("File") : _T("Directory"), it->filePath);
+			if (it->fileType == FILETYPEDIRECTORY)
+			{
+				curFileList.clear();
+				if (FindFilesInDirectory(it->filePath, curFileList) != 0)
+				{
+					_tprintf(_T("FindFilesInDirectory Failed! file list length %d\n"), curFileList.size());
+				}
+
+				// Save iterator then insert insert after the current elment.
+				// Then restore the iterator to the first new inserted element.
+				beforeInsert = it;
+				it++;
+				fileList.insert(it, curFileList.begin(), curFileList.end());
+				it = beforeInsert;
+				it++;
+				_tprintf(_T("%s: %s\n"), it->fileType == FILETYPEFILE ? _T("File") : _T("Directory"), it->filePath);
+			}
+
+		}
+
+		for (std::list<FileDataStruct>::iterator it = fileList.begin(); it != fileList.end(); ++it)
+		{
+
 		}
 
 
