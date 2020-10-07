@@ -238,7 +238,11 @@ int FindFilesInDirectory(const _TCHAR* path,  std::list<FileDataStruct> &fileLis
 			filesize.HighPart = pThreadData->ffd.nFileSizeHigh;
 			_tprintf(TEXT("  %s   %ld bytes\n"), pThreadData->ffd.cFileName, filesize.QuadPart);
 		}
-		fileList.push_back(data);
+		if(!IsPathModifier(&data))
+		{
+			fileList.push_back(data);
+		}
+		
 		FindFileThreadHandler(pThreadData);
 	} while (pThreadData->retVal == 0);
 
@@ -384,4 +388,27 @@ BOOL CompareFileData(const FileDataStruct* data1, const FileDataStruct* data2)
 BOOL IsFileDataNull(FileDataStruct* data1)
 {
 	return CompareFileData(data1, &FileDataNULL);
+}
+
+/*
+* Description: Checks if the file is a directory and if it is "." or "..".
+*/
+BOOL IsPathModifier(FileDataStruct* data1)
+{
+	int strResult = 0;
+
+	if (data1->fileType == FILETYPEDIRECTORY)
+	{
+		if (_tcscmp(data1->filePath, _T(".")) == 0)
+		{
+			return true;
+		}
+
+		if (_tcscmp(data1->filePath, _T("..")) == 0)
+		{
+			return true;
+		}
+	}
+
+	return false;
 }

@@ -6,12 +6,23 @@
 
 #include "windows.h"
 #include <list>
+#include <strsafe.h>
 
 enum FileTypeEnum {FILETYPEFILE, FILETYPEDIRECTORY, FILETYPENULL};
 
-typedef struct {
+typedef struct FileDataStruct {
 	_TCHAR filePath[MAX_PATH];
 	FileTypeEnum fileType;
+
+	FileDataStruct(_TCHAR* lfilePath, FileTypeEnum lfileTypeEnum) :  fileType(lfileTypeEnum)
+	{
+		StringCchCopy(filePath, MAX_PATH, lfilePath);
+	}
+
+	FileDataStruct()
+	{
+		fileType = FILETYPEFILE;
+	}
 } FileDataStruct;
 
 #define MAX_VOLUME_BUFFER_SIZE	MAX_PATH
@@ -26,3 +37,4 @@ typedef struct {
 
 int FindFilesInDirectory(const _TCHAR* path, std::list<FileDataStruct> &fileList);
 DWORD GetVolumeInfo(VolumeInfoStruct* volumeInfo);
+BOOL IsPathModifier(FileDataStruct* data1);

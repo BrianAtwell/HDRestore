@@ -11,7 +11,7 @@
 #include <strsafe.h>
 #include <list>
 
-// Pass in (Recovery Drive, Restore BASEPATH, -R RDrive path
+// Pass in (Recovery Drive, Restore BASEPATH, -R RDrive path)
 
 #define MAX_DRIVE   4
 
@@ -31,7 +31,15 @@ int _tmain(int argc, _TCHAR* argv[])
 
 		std::list<FileDataStruct> fileList;
 
+		std::list<FileDataStruct> directoryList;
+
 		FindFilesInDirectory(recoveryPath, fileList);
+
+		//directoryList.push_back(FileDataStruct(recoveryPath, FILETYPEDIRECTORY));
+		for (std::list<FileDataStruct>::iterator it = fileList.begin(); it != fileList.end(); ++it)
+		{
+			_tprintf(_T("%s: %s\n"), it->fileType == FILETYPEFILE ? _T("File") : _T("Directory"), it->filePath);
+		}
 
 
 	}
