@@ -4,6 +4,7 @@
 #include "stdafx.h"
 
 #include "FileManagement.h"
+#include "ErrorHandling.h"
 
 #include <cstdio>
 #include <tchar.h>
@@ -19,6 +20,40 @@ const _TCHAR PROGRAM_NAME[] = _T("CHDRestore");
 _TCHAR recoveryDrive[MAX_DRIVE] = _T("C:\\");
 _TCHAR restoredPath[MAX_PATH] = _T("C:\\testRecovery");
 _TCHAR recoveryPath[MAX_PATH] = _T("C:\\temp");
+_TCHAR copyFileLogName[MAX_PATH] = { 0 };
+
+/*
+DWORD CALLBACK  CopyProgressRoutine(
+	LARGE_INTEGER TotalFileSize,
+	LARGE_INTEGER TotalBytesTransferred,
+	LARGE_INTEGER StreamSize,
+	LARGE_INTEGER StreamBytesTransferred,
+	DWORD dwStreamNumber,
+	DWORD dwCallbackReason,
+	HANDLE hSourceFile,
+	HANDLE hDestinationFile,
+	LPVOID lpData
+	);
+
+DWORD CALLBACK  CopyProgressRoutine(
+	LARGE_INTEGER TotalFileSize,
+	LARGE_INTEGER TotalBytesTransferred,
+	LARGE_INTEGER StreamSize,
+	LARGE_INTEGER StreamBytesTransferred,
+	DWORD dwStreamNumber,
+	DWORD dwCallbackReason,
+	HANDLE hSourceFile,
+	HANDLE hDestinationFile,
+	LPVOID lpData
+	)
+{
+	int percentage = (double(TotalBytesTransferred.QuadPart) / double(TotalFileSize.QuadPart)) * 100;
+
+	printf("%%%d copied\n", percentage);
+
+	return PROGRESS_CONTINUE;
+}
+*/
 
 int _tmain(int argc, _TCHAR* argv[])
 {
@@ -61,10 +96,52 @@ int _tmain(int argc, _TCHAR* argv[])
 
 		}
 
+		_TCHAR tempNewPath[MAX_PATH] = { 0 };
+
+		CovertPathToNewPath(fileList.begin()->filePath, recoveryPath, restoredPath, tempNewPath);
+
+		_tprintf(_T("CovertPathToNewPath File %s NewFilePath %s\n"), fileList.begin()->filePath, tempNewPath);
+
+		StringGetDirectoryName(tempNewPath, MAX_PATH, recoveryPath);
+
+		if (_tcscmp(tempNewPath, recoveryDrive) == 0)
+		{
+			StringCchPrintf(tempNewPath, MAX_PATH, _T("root%c"), recoveryDrive[0]);
+		}
+
+		StringCchPrintf(tempNewPath, MAX_PATH, _T("%s\\%s.txt"), recoveryDrive[0]);
+		_tprintf(_T("Folder Name: %s\n"), tempNewPath);
+
+
+		/*
+
+		BOOL retVal = 0;
+
+		retVal = CopyFileEx(fileList.begin()->filePath, tempNewPath, (LPPROGRESS_ROUTINE)CopyProgressRoutine, NULL, false, COPY_FILE_FAIL_IF_EXISTS);
+
+		if (retVal) {
+			_tprintf(_T("%s copied to current directory.\n"), tempNewPath);
+		}
+		else {
+			_tprintf(_T("%s not copied to current directory.\n"), tempNewPath);
+			printError(_T("CopyFileEx"));
+		}
+		*/
+
+		/*
 		for (std::list<FileDataStruct>::iterator it = fileList.begin(); it != fileList.end(); ++it)
 		{
-
+			if (it->fileType == FILETYPEFILE)
+			{
+				CovertPathToNewPath(it->filePath, recoveryPath, restoredPath, tempNewPath);
+				CopyFileEx(it->filePath, tempNewPath, (LPPROGRESS_ROUTINE)CopyProgressRoutine, NULL, false, COPY_FILE_FAIL_IF_EXISTS);
+			}
+			else if (it->fileType == FILETYPEDIRECTORY)
+			{
+				// Create Directory
+			}
 		}
+		*/
 
 
 	}

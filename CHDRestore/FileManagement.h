@@ -37,5 +37,8 @@ typedef struct {
 
 int FindFilesInDirectory(const _TCHAR* path, std::list<FileDataStruct> &fileList);
 DWORD GetVolumeInfo(VolumeInfoStruct* volumeInfo);
+BOOL StringPathRemoveFileSpec(_TCHAR* dest, size_t destSize, _TCHAR* path);
+BOOL StringGetDirectoryName(_TCHAR* dest, size_t destSize, _TCHAR* path);
 BOOL IsPathModifier(FileDataStruct* data1);
 BOOL IsPathModifier(_TCHAR* filename);
+BOOL CovertPathToNewPath(_TCHAR *path, _TCHAR *basePath, _TCHAR *newBasePath, _TCHAR *newPath);

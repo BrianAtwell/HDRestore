@@ -15,6 +15,7 @@
 #include <strsafe.h>
 #include <list>
 #include <ctime>
+#include <shlwapi.h>
 
 const FileDataStruct FileDataNULL = {_T("NULL"), FILETYPENULL};
 
@@ -32,9 +33,36 @@ typedef struct {
 	int retVal;
 }FindFileThreadStruct, *PFindFileThreadStruct;
 
+typedef struct {
+	LARGE_INTEGER TotalFileSize;
+	LARGE_INTEGER TotalBytesTransferred;
+	LARGE_INTEGER LastTotalBytesTransferred;
+	DWORD dwCallbackReason;
+	UINT8 callbackState;
+}CopyFileThreadCallbackStruct, *PCopyFileThreadCallbackStruct;
+
+typedef struct {
+	_TCHAR filePath[MAX_PATH];
+	_TCHAR newFilePath[MAX_PATH];
+	int retVal;
+	CopyFileThreadCallbackStruct callbackData;
+}CopyFileThreadStruct, *PCopyFileThreadStruct;
+
 DWORD WINAPI FindFileThreadedFunction(LPVOID lpParam);
 
 DWORD FindFileThreadHandler();
+
+DWORD CALLBACK  CopyProgressRoutine(
+	LARGE_INTEGER TotalFileSize,
+	LARGE_INTEGER TotalBytesTransferred,
+	LARGE_INTEGER StreamSize,
+	LARGE_INTEGER StreamBytesTransferred,
+	DWORD dwStreamNumber,
+	DWORD dwCallbackReason,
+	HANDLE hSourceFile,
+	HANDLE hDestinationFile,
+	LPVOID lpData
+	);
 
 /*
 * Description: Handles creating a thread to handle FindFileFirst and FindFileNext.
@@ -275,6 +303,186 @@ int FindFilesInDirectory(const _TCHAR* path,  std::list<FileDataStruct> &fileLis
 }
 
 /*
+* Description: Handles creating a thread to handle CopyFileEx.
+*	The thread must 
+*/
+DWORD WINAPI CopyFileThreadedFunction(LPVOID lpParam) {
+	PCopyFileThreadStruct threadData = (PCopyFileThreadStruct)lpParam;
+
+	threadData->retVal = CopyFileEx(threadData->filePath, threadData->newFilePath, (LPPROGRESS_ROUTINE)CopyProgressRoutine, &threadData->callbackData, false, COPY_FILE_FAIL_IF_EXISTS);
+
+	return 0;
+}
+
+BOOL CopyFileThreadHandler(PCopyFileThreadStruct pThreadData)
+{
+	DWORD   dwThreadId = 0;
+	HANDLE  hThread = NULL;
+	int timeTaken = 0;
+	DWORD dwWait = 0;
+	bool hasThreadCompleted = false;
+	int timeTakenMs = 0;
+	clock_t startClock, stopClock;
+
+	pThreadData->callbackData.callbackState = 0;
+	pThreadData->callbackData.dwCallbackReason = 0;
+	pThreadData->callbackData.LastTotalBytesTransferred.QuadPart = 0;
+	pThreadData->callbackData.TotalBytesTransferred.QuadPart = 0;
+	pThreadData->callbackData.TotalFileSize.QuadPart = 0;
+
+	//Set this to ERROR_FINDFILE_THREAD_TIMEDOUT on each call. If it is successful then it will be zero.
+	// If it fails it will be ERROR_FINDFILE_THREAD_TIMEDOUT or the value of GetLastError()
+	pThreadData->retVal = ERROR_FINDFILE_THREAD_TIMEDOUT;
+
+	// Create the thread to begin execution on its own.
+	hThread  = CreateThread(
+		NULL,                   // default security attributes
+		0,                      // use default stack size  
+		CopyFileThreadedFunction,       // thread function name
+		pThreadData,          // argument to thread function 
+		0,                      // use default creation flags 
+		&dwThreadId);   // returns the thread identifier 
+
+
+	// Check the return value for success.
+	if (hThread == NULL)
+	{
+		printError(TEXT("CreateThread"));
+		return -1;
+	}
+
+
+	startClock = clock();
+
+	while (timeTaken < MAX_FINDFILE_THREAD_TIME)
+	{
+		dwWait = WaitForSingleObject(hThread, 0);
+		if (pThreadData->callbackData.callbackState == 1)
+		{
+			pThreadData->callbackData.callbackState = 0;
+			// Every time the callback is called reset the time out
+			// This ensures that progress is still being made.
+			timeTaken = 0;
+		}
+		if (dwWait != WAIT_TIMEOUT)
+		{
+			hasThreadCompleted = true;
+			break;
+		}
+		Sleep(FINDFILE_THREAD_SLEEP);
+		timeTaken += FINDFILE_THREAD_SLEEP;
+	}
+
+	stopClock = clock();
+
+	timeTakenMs = 1000 * (stopClock - startClock) / CLOCKS_PER_SEC;
+
+	if (!hasThreadCompleted)
+	{
+		dwWait = WaitForSingleObject(hThread, 0);
+		if (dwWait != WAIT_TIMEOUT)
+		{
+			hasThreadCompleted = true;
+		}
+		else
+		{
+			if (TerminateThread(hThread, -1) == 0)
+			{
+				printError(TEXT("FindFileThreadHandler:TerminateThread"));
+			}
+			else
+			{
+				_tprintf(_T("FindFileThreadHandler:TerminateThread Success\n"));
+			}
+		}
+	}
+
+
+	// Thread has completed
+	// clean up thread handle
+	// Technically should never be NULL at this point.
+	if (hThread != NULL)
+	{
+		CloseHandle(hThread);
+	}
+
+	if (hasThreadCompleted)
+	{
+		_tprintf(_T("FindFileThreadHandler:Thread completed in %d ms successfully\n"), timeTakenMs);
+		return 0;
+	}
+
+	return -2;
+}
+
+/*
+ * Description: Cppy files from list to a new directory
+ */
+BOOL CopyAllFiles(_TCHAR *recoveryPath, _TCHAR *restoredPath, std::list<FileDataStruct> &fileList)
+{
+	_TCHAR tempNewPath[MAX_PATH] = { 0 };
+	CopyFileThreadStruct threadData;
+	int retVal = 0;
+
+	for (std::list<FileDataStruct>::iterator it = fileList.begin(); it != fileList.end(); ++it)
+	{
+		if (it->fileType == FILETYPEFILE)
+		{
+			
+			StringCchCopy(threadData.filePath, MAX_PATH, it->filePath);
+			CovertPathToNewPath(threadData.filePath, recoveryPath, restoredPath, threadData.newFilePath);
+			retVal = CopyFileThreadHandler(&threadData);
+
+			if (retVal) {
+				_tprintf(_T("%s copied to current directory.\n"), tempNewPath);
+			}
+			else {
+				_tprintf(_T("%s not copied to current directory.\n"), tempNewPath);
+				printError(_T("CopyFileEx"));
+			}
+		}
+		else if (it->fileType == FILETYPEDIRECTORY)
+		{
+			// Create Directory
+		}
+	}
+	return true;
+}
+
+DWORD CALLBACK  CopyProgressRoutine(
+	LARGE_INTEGER TotalFileSize,
+	LARGE_INTEGER TotalBytesTransferred,
+	LARGE_INTEGER StreamSize,
+	LARGE_INTEGER StreamBytesTransferred,
+	DWORD dwStreamNumber,
+	DWORD dwCallbackReason,
+	HANDLE hSourceFile,
+	HANDLE hDestinationFile,
+	LPVOID lpData
+	)
+{
+	PCopyFileThreadCallbackStruct callbackData = (PCopyFileThreadCallbackStruct)lpData;
+
+	if (callbackData->TotalBytesTransferred.QuadPart != TotalBytesTransferred.QuadPart)
+	{
+		callbackData->LastTotalBytesTransferred = callbackData->TotalBytesTransferred;
+		callbackData->TotalBytesTransferred = TotalBytesTransferred;
+		callbackData->dwCallbackReason = dwCallbackReason;
+		callbackData->TotalFileSize = TotalFileSize;
+
+		// Signal to main thread that bytes transferred changed
+		// Progress made
+		callbackData->callbackState = 1;
+	}
+
+	int percentage = (double(TotalBytesTransferred.QuadPart) / double(TotalFileSize.QuadPart)) * 100;
+
+	printf("%%%d copied\n", percentage);
+
+	return PROGRESS_CONTINUE;
+}
+
+/*
  * Description: Gets the volume info from a given path.
  * This info is used by to determine if the drive is the same between sessions.
  */
@@ -435,6 +643,135 @@ BOOL IsPathModifier(_TCHAR* filename)
 	if (_tcscmp(filename, _T("..")) == 0)
 	{
 		return true;
+	}
+
+	return false;
+}
+
+/*
+* Description: Returns position of the end of str2 in str1.
+*/
+int StringEndPosition(_TCHAR *str1, _TCHAR* str2)
+{
+	int index = 0;
+	int offset = 0;
+
+	while (str1[index+offset] != str2[index] && str1[index + offset] != 0 && str2[index] != 0)
+	{
+		offset++;
+	}
+
+	while (str1[index + offset] == str2[index] && str1[index + offset] != 0 && str2[index] != 0)
+	{
+		index++;
+	}
+	return index;
+}
+
+/*
+* Description: Returns the top level directory in path.
+*/
+BOOL StringPathRemoveFileSpec(_TCHAR* dest, size_t destSize, _TCHAR* path)
+{
+	StringCchCopy(dest, MAX_PATH, path);
+	return PathRemoveFileSpec(dest);
+}
+
+/*
+ * Description: Returns the top level directory in path.
+ */
+BOOL StringGetDirectoryName(_TCHAR* dest, size_t destSize, _TCHAR* path)
+{
+	size_t destLength = 0;
+	size_t lastSlashPos = 0;
+	size_t endOfName = 0;
+	DWORD pathAttributes = 0;
+
+	pathAttributes=GetFileAttributes(path);
+
+	// True: it is a Directory, simply copy to dest.
+	if (pathAttributes&FILE_ATTRIBUTE_DIRECTORY)
+	{
+		StringCchCopy(dest, destSize, path);
+	}
+	// False: it is a File, remove file spec.
+	else
+	{
+		StringPathRemoveFileSpec(dest, destSize, path);
+	}
+
+	if (_tcscmp(dest+1, _T(":\\")) == 0 && isalpha(dest[0]))
+	{
+		return 0;
+	}
+
+	// At this point dest should contain the full path of the top level folder.
+	// either with a trailing '\\' or not.
+	// Sample: C:\somefolder\test\ or C:\somefolder\test or C:\ 
+	for (int i = 0; i < destSize && dest[i] != '\0'; i++)
+	{
+		if (dest[i]=='\\')
+		{
+			// We need at least two extra characters, a valid charater for a folder name and a null terminating character.
+			if (i < (destSize-3) && dest[i+1]!='\0')
+			{
+				lastSlashPos = i;
+			}
+		}
+		else
+		{
+			endOfName = i;
+		}
+	}
+
+	lastSlashPos++;
+
+	for (int i = 0; i < destSize && dest[i] != '\0'; i++)
+	{
+		if (i <= (endOfName-lastSlashPos))
+		{
+			dest[i] = dest[lastSlashPos + i];
+		}
+		else
+		{
+			dest[i] = '\0';
+		}
+	}
+
+	return 0;
+	
+}
+
+/*
+* Description: Converts one path to a new path 
+*/
+BOOL CovertPathToNewPath(_TCHAR *path, _TCHAR *basePath, _TCHAR *newBasePath, _TCHAR *newPath)
+{
+	int index = 0;
+	size_t topDirectory = 0;
+	index = StringEndPosition(path, basePath);
+
+	//Add top directory to newPath
+	if (StringCchLength(basePath, MAX_PATH, &topDirectory) == S_OK)
+	{
+		if (basePath[topDirectory - 1] == '\\')
+		{
+			topDirectory--;
+		}
+		for (int i = topDirectory-1; i > 0; i--)
+		{
+			if (basePath[i] == '\\')
+			{
+				topDirectory = i;
+				break;
+			}
+		}
+		if (index != 0)
+		{
+			// copy Path[index] to Path[end] to end of newBasePath and store it in new Path
+			StringCchPrintf(newPath, MAX_PATH, _T("%s%s%s"), newBasePath, basePath+topDirectory, (path + index));
+			return true;
+		}
 	}
 
 	return false;
