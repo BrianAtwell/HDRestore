@@ -749,11 +749,27 @@ BOOL CovertPathToNewPath(_TCHAR *path, _TCHAR *basePath, _TCHAR *newBasePath, _T
 {
 	int index = 0;
 	size_t topDirectory = 0;
+	size_t pathLen = 0;
 	index = StringEndPosition(path, basePath);
+
+	if (StringCchLength(path, MAX_PATH, &pathLen) != S_OK)
+	{
+		return false;
+	}
 
 	//Add top directory to newPath
 	if (StringCchLength(basePath, MAX_PATH, &topDirectory) == S_OK)
 	{
+		if (index < pathLen && index < topDirectory)
+		{
+			//Path does not contain basepath
+			return false;
+		}
+		if (_tcscmp(basePath + 1, _T(":\\")) == 0 && topDirectory == 3)
+		{
+			StringCchPrintf(newPath, MAX_PATH, _T("%s\\root%c\\%s"), newBasePath, basePath[0], (path + index));
+			return true;
+		}
 		if (basePath[topDirectory - 1] == '\\')
 		{
 			topDirectory--;
