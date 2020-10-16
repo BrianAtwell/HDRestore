@@ -6,6 +6,7 @@
 #include "stdafx.h"
 
 #include"FileManagement.h"
+#include "StringUtilities.h"
 
 #include "ErrorHandling.h"
 
@@ -18,6 +19,8 @@
 #include <shlwapi.h>
 
 const FileDataStruct FileDataNULL = {_T("NULL"), FILETYPENULL};
+BOOL CompareVolumeInfo(VolumeInfoStruct* volumeInfo1, VolumeInfoStruct* volumeInfo2);
+BOOL FileExists(_TCHAR* path);
 
 /*
  * Description: Below is required to call FindFirstFile on a different thread.
@@ -46,6 +49,7 @@ typedef struct {
 	_TCHAR newFilePath[MAX_PATH];
 	int retVal;
 	CopyFileThreadCallbackStruct callbackData;
+	FILE* logFile;
 }CopyFileThreadStruct, *PCopyFileThreadStruct;
 
 DWORD WINAPI FindFileThreadedFunction(LPVOID lpParam);
@@ -232,7 +236,7 @@ int FindFilesInDirectory(const _TCHAR* path,  std::list<FileDataStruct> &fileLis
 
 	if (length_of_arg > (MAX_PATH - 3))
 	{
-		_tprintf(TEXT("\nError: Directory path is too long.%s\n", path));
+		_tprintf(_T("\nError: Directory path is too long.%s\n"), path);
 		return (-1);
 	}
 
@@ -302,6 +306,39 @@ int FindFilesInDirectory(const _TCHAR* path,  std::list<FileDataStruct> &fileLis
 	return dwError;
 }
 
+DWORD CALLBACK  CopyProgressRoutine(
+	LARGE_INTEGER TotalFileSize,
+	LARGE_INTEGER TotalBytesTransferred,
+	LARGE_INTEGER StreamSize,
+	LARGE_INTEGER StreamBytesTransferred,
+	DWORD dwStreamNumber,
+	DWORD dwCallbackReason,
+	HANDLE hSourceFile,
+	HANDLE hDestinationFile,
+	LPVOID lpData
+	)
+{
+	PCopyFileThreadCallbackStruct callbackData = (PCopyFileThreadCallbackStruct)lpData;
+
+	if (callbackData->TotalBytesTransferred.QuadPart != TotalBytesTransferred.QuadPart)
+	{
+		callbackData->LastTotalBytesTransferred = callbackData->TotalBytesTransferred;
+		callbackData->TotalBytesTransferred = TotalBytesTransferred;
+		callbackData->dwCallbackReason = dwCallbackReason;
+		callbackData->TotalFileSize = TotalFileSize;
+
+		// Signal to main thread that bytes transferred changed
+		// Progress made
+		callbackData->callbackState = 1;
+	}
+
+	int percentage = (int)((double(TotalBytesTransferred.QuadPart) / double(TotalFileSize.QuadPart)) * 100);
+
+	printf("%%%d copied\n", percentage);
+
+	return PROGRESS_CONTINUE;
+}
+
 /*
 * Description: Handles creating a thread to handle CopyFileEx.
 *	The thread must 
@@ -334,6 +371,8 @@ BOOL CopyFileThreadHandler(PCopyFileThreadStruct pThreadData)
 	// If it fails it will be ERROR_FINDFILE_THREAD_TIMEDOUT or the value of GetLastError()
 	pThreadData->retVal = ERROR_FINDFILE_THREAD_TIMEDOUT;
 
+	_ftprintf(pThreadData->logFile, _T("%s ["), pThreadData->filePath);
+
 	// Create the thread to begin execution on its own.
 	hThread  = CreateThread(
 		NULL,                   // default security attributes
@@ -353,6 +392,11 @@ BOOL CopyFileThreadHandler(PCopyFileThreadStruct pThreadData)
 
 
 	startClock = clock();
+	LARGE_INTEGER totalBytesTransferred;
+	LARGE_INTEGER totalFileSize;
+	int lastUpdateProgress = 0;
+	int curProgress = 0;
+
 
 	while (timeTaken < MAX_FINDFILE_THREAD_TIME)
 	{
@@ -362,6 +406,18 @@ BOOL CopyFileThreadHandler(PCopyFileThreadStruct pThreadData)
 			pThreadData->callbackData.callbackState = 0;
 			// Every time the callback is called reset the time out
 			// This ensures that progress is still being made.
+			totalBytesTransferred = pThreadData->callbackData.TotalBytesTransferred;
+			totalFileSize = pThreadData->callbackData.TotalFileSize;
+			curProgress = (int)((double(totalBytesTransferred.QuadPart) / double(totalFileSize.QuadPart)) * 20);
+
+			if (curProgress > lastUpdateProgress)
+			{
+				for (int i = 0; i < curProgress - lastUpdateProgress; i++)
+				{
+					_ftprintf(pThreadData->logFile, _T("="));
+				}
+				lastUpdateProgress = curProgress;
+			}
 			timeTaken = 0;
 		}
 		if (dwWait != WAIT_TIMEOUT)
@@ -408,78 +464,343 @@ BOOL CopyFileThreadHandler(PCopyFileThreadStruct pThreadData)
 
 	if (hasThreadCompleted)
 	{
+		if (curProgress > lastUpdateProgress)
+		{
+			for (int i = 0; i < curProgress - lastUpdateProgress; i++)
+			{
+				_ftprintf(pThreadData->logFile, _T("="));
+			}
+			lastUpdateProgress = curProgress;
+		}
+		_ftprintf(pThreadData->logFile, _T("]\n"));
+		fflush(pThreadData->logFile);
 		_tprintf(_T("FindFileThreadHandler:Thread completed in %d ms successfully\n"), timeTakenMs);
+
+		if (pThreadData->retVal != 0)
+		{
+			return 0;
+		}
+		return 1;
+	}
+	
+	fflush(pThreadData->logFile);
+
+	return -2;
+}
+
+BOOL GetLogName(_TCHAR* recoveryDrive, _TCHAR* recoveryPath, _TCHAR* restorePath, _TCHAR* logPath, size_t logPathLen)
+{
+	_TCHAR logName[MAX_PATH] = { 0 };
+	StringGetDirectoryName(logName, MAX_PATH, recoveryPath);
+	HRESULT retVal = 0;
+
+
+	if (_tcscmp(logName, recoveryDrive) == 0)
+	{
+		retVal = StringCchPrintf(logName, logPathLen, _T("root%c"), recoveryDrive[0]);
+		if (retVal != S_OK)
+		{
+			return false;
+		}
+	}
+
+	retVal = StringCchPrintf(logPath, logPathLen, _T("%s\\%s.txt"), restorePath, logName);
+	if (retVal != S_OK)
+	{
+		return false;
+	}
+	//_tprintf(_T("Folder Name: %s\n"), logPath);
+
+	return true;
+}
+
+BOOL RemoveFromList(_TCHAR* filePath, std::list<FileDataStruct> &fileList)
+{
+	for (std::list<FileDataStruct>::iterator it = fileList.begin(); it != fileList.end(); ++it)
+	{
+		if (_tcscmp(filePath, it->filePath) == 0)
+		{
+			_tprintf(_T("%s removed from fileList\n"), it->filePath);
+			fileList.erase(it);
+			return true;
+		}
+	}
+
+	return false;
+}
+
+
+
+BOOL ReadLineContainsString(FILE* logFile, _TCHAR* findStr, _TCHAR* returnString, size_t returnStringSize)
+{
+	if (_fgetts(returnString, returnStringSize, logFile) == NULL)
+	{
 		return 0;
 	}
 
-	return -2;
+	if (ContainsString(returnString, findStr, returnStringSize) != 1)
+	{
+		return 0;
+	}
+
+	return 1;
+}
+
+void WriteVolumeInfoToFile(FILE* logFile, VolumeInfoStruct* volumeInfo)
+{
+	if (logFile != NULL)
+	{
+		_ftprintf(logFile, _T("VolumeInfo\n{\n"));
+		_ftprintf(logFile, _T("Path: %Ts\n"), volumeInfo->volumePath);
+		_ftprintf(logFile, _T("VolumeName: %Ts\n"), volumeInfo->volumeNameBuffer);
+		_ftprintf(logFile, _T("SerialNumber: %0.4X-%0.4X\n"), (volumeInfo->volumeSerialNumber >> 16) & 0xFFFF, volumeInfo->volumeSerialNumber & 0xFFFF);
+		_ftprintf(logFile, _T("FileSystemName: %Ts\n"), volumeInfo->fileSystemNameBuffer);
+		_ftprintf(logFile, _T("lpFileSystemFlags: %X\n"), volumeInfo->fileSystemFlags);
+		_ftprintf(logFile, _T("}\n"));
+	}
+}
+
+BOOL ReadVolumeInfoFromFile(FILE* logFile, VolumeInfoStruct* volumeInfo)
+{
+	_TCHAR readString[MAX_VOLUME_FILE_READ_SIZE] = { 0 };
+	DWORD highByteSerial = 0;
+	DWORD lowByteSerial = 0;
+
+	if (ReadLineContainsString(logFile, _T("VolumeInfo"), readString, MAX_VOLUME_FILE_READ_SIZE) != 1)
+	{
+		_tprintf(_T("ReadVolumeInfo VolumeInfo line invalid. Read '%s'\n"), readString);
+		return 1;
+	}
+
+	if (ReadLineContainsString(logFile, _T("{"), readString, MAX_VOLUME_FILE_READ_SIZE) != 1)
+	{
+		_tprintf(_T("ReadVolumeInfo { line invalid. Read '%s'\n"), readString);
+		return 1;
+	}
+
+	if (ReadLineContainsString(logFile, _T("Path:"), readString, MAX_VOLUME_FILE_READ_SIZE) != 1)
+	{
+		_tprintf(_T("ReadVolumeInfo Path: line invalid. Read '%s'\n"), readString);
+		return 1;
+	}
+
+	_stscanf(readString, _T("Path: %Ts\n"), volumeInfo->volumePath);
+
+	if (ReadLineContainsString(logFile, _T("VolumeName:"), readString, MAX_VOLUME_FILE_READ_SIZE) != 1)
+	{
+		_tprintf(_T("ReadVolumeInfo VolumeName: line invalid. Read '%s'\n"), readString);
+		return 1;
+	}
+
+	_stscanf(readString, _T("VolumeName: %Ts\n"), volumeInfo->volumeNameBuffer);
+
+	if (ReadLineContainsString(logFile, _T("SerialNumber:"), readString, MAX_VOLUME_FILE_READ_SIZE) != 1)
+	{
+		_tprintf(_T("ReadVolumeInfo SerialNumber: line invalid. Read '%s'\n"), readString);
+		return 1;
+	}
+
+	_stscanf(readString, _T("SerialNumber: %4X-%4X\n"), &highByteSerial, &lowByteSerial);
+	volumeInfo->volumeSerialNumber = highByteSerial << 16 | lowByteSerial;
+
+	if (ReadLineContainsString(logFile, _T("FileSystemName:"), readString, MAX_VOLUME_FILE_READ_SIZE) != 1)
+	{
+		_tprintf(_T("ReadVolumeInfo FileSystemName: line invalid. Read '%s'\n"), readString);
+		return 1;
+	}
+
+	_stscanf(readString, _T("FileSystemName: %Ts\n"), volumeInfo->fileSystemNameBuffer);
+
+	if (ReadLineContainsString(logFile, _T("lpFileSystemFlags:"), readString, MAX_VOLUME_FILE_READ_SIZE) != 1)
+	{
+		_tprintf(_T("ReadVolumeInfo lpFileSystemFlags: line invalid. Read '%s'\n"), readString);
+		return 1;
+	}
+
+	_stscanf(readString, _T("lpFileSystemFlags: %X\n"), &volumeInfo->fileSystemFlags);
+
+	if (ReadLineContainsString(logFile, _T("}"), readString, MAX_VOLUME_FILE_READ_SIZE) != 1)
+	{
+		_tprintf(_T("ReadVolumeInfo } line invalid. Read '%s'\n"), readString);
+		return 1;
+	}
+
+	return 0;
+}
+
+BOOL ReadCopyLogFile(VolumeInfoStruct* curVolumeInfo, _TCHAR* logFilePath, std::list<FileDataStruct> &fileList)
+{
+	FILE* logFile;
+	_TCHAR tempNewPath[MAX_PATH] = { 0 };
+
+	logFile = _tfopen(logFilePath, _T("r"));
+
+	_TCHAR readString[MAX_LOG_STRING_LEN] = { 0 };
+	size_t beginProgress = 0;
+	int progressStatus;
+	// Read Existing log
+	if (logFile == NULL)
+	{
+		_ftprintf(stderr, _T("Error opening file %s\n"), logFilePath);
+		return false;
+	}
+
+	VolumeInfoStruct readVolumeInfo = { { 0 },{ 0 },0,0,0,{ 0 } };
+
+	if (ReadVolumeInfoFromFile(logFile, &readVolumeInfo) != 0)
+	{
+		_tprintf(_T("Failed ReadVolumeInfoFromFile\n"));
+	}
+
+	if (CompareVolumeInfo(&readVolumeInfo, curVolumeInfo) != 0)
+	{
+		_ftprintf(stderr, _T("Error VolumeInfo does not match. Can not use previous log data.\n"));
+		if (logFile != NULL)
+		{
+			fclose(logFile);
+		}
+
+		return false;
+	}
+
+	while (_fgetts(readString, MAX_LOG_STRING_LEN, logFile) != NULL)
+	{
+		if (StringEndPosition(readString, MAX_LOG_STRING_LEN, LOG_PROGRESS_BRACKET_START_CHAR, beginProgress)!=1)
+		{
+			_tprintf(_T("Failed to StringEndPostion on string %s\n"), readString);
+			break;
+		}
+
+		//Copy readString[0:beginProgress-2] => tempNewPath
+		if (StringCchCopyN(tempNewPath, MAX_PATH, readString, beginProgress - 1) != S_OK)
+		{
+			_tprintf(_T("Failed to StringCchCopyN on string %s\n"), readString);
+			break;
+		}
+
+		progressStatus = 0;
+		//Get progress status
+		for (int i = beginProgress+1; i < MAX_LOG_STRING_LEN && readString[i] != _T('\0') && readString[i] != _T('\n'); i++)
+		{
+			if (readString[i] == LOG_PROGRESS_BAR_CHAR)
+			{
+				progressStatus++;
+			}
+			else
+			{
+				break;
+			}
+
+			if (progressStatus == LOG_PROGRESS_LENGTH)
+			{
+				break;
+			}
+		}
+
+		_tprintf(_T("'%s' progress %d\n"), tempNewPath, progressStatus);
+
+		RemoveFromList(tempNewPath, fileList);
+	}
+
+	if (logFile != NULL)
+	{
+		fclose(logFile);
+	}
+
+	return true;
 }
 
 /*
  * Description: Cppy files from list to a new directory
  */
-BOOL CopyAllFiles(_TCHAR *recoveryPath, _TCHAR *restoredPath, std::list<FileDataStruct> &fileList)
+BOOL CopyAllFiles(_TCHAR* recoveryDrive, _TCHAR *recoveryPath, _TCHAR *restoredPath, std::list<FileDataStruct> &fileList)
 {
-	_TCHAR tempNewPath[MAX_PATH] = { 0 };
+	_TCHAR logFilePath[MAX_PATH] = { 0 };
 	CopyFileThreadStruct threadData;
-	int retVal = 0;
+	BOOL retVal = 0;
+	bool logFileExisted = false;
 
+	GetLogName(recoveryDrive, recoveryPath, restoredPath, logFilePath, MAX_PATH);
+	//Open File
+	FILE* logFile;
+
+	VolumeInfoStruct volumeInfo = { { 0 },{ 0 },0,0,0,{ 0 } };
+	StringCchCopy(volumeInfo.volumePath, MAX_PATH, recoveryDrive);
+	GetVolumeInfo(&volumeInfo);
+
+	if (FileExists(logFilePath) == 1)
+	{
+		logFileExisted = true;
+		_tprintf(_T("LogFile Exists %s \n"), logFilePath);
+	}
+
+	if (logFileExisted == true)
+	{
+		ReadCopyLogFile(&volumeInfo, logFilePath, fileList);
+	}
+	
+	
+	logFile = _tfopen(logFilePath, _T("a+"));
+
+	if (logFile == NULL)
+	{
+		_ftprintf(stderr, _T("Error opening file %s\n"), logFilePath);
+		return false;
+	}
+
+	if (logFileExisted != true)
+	{
+		WriteVolumeInfoToFile(logFile, &volumeInfo);
+	}
+
+
+	threadData.logFile = logFile;
+	// Start Copying files 
 	for (std::list<FileDataStruct>::iterator it = fileList.begin(); it != fileList.end(); ++it)
 	{
 		if (it->fileType == FILETYPEFILE)
 		{
-			
 			StringCchCopy(threadData.filePath, MAX_PATH, it->filePath);
 			CovertPathToNewPath(threadData.filePath, recoveryPath, restoredPath, threadData.newFilePath);
 			retVal = CopyFileThreadHandler(&threadData);
 
-			if (retVal) {
-				_tprintf(_T("%s copied to current directory.\n"), tempNewPath);
+			if (retVal==0) {
+				_tprintf(_T("'%s' copied to current directory.\n"), threadData.newFilePath);
 			}
 			else {
-				_tprintf(_T("%s not copied to current directory.\n"), tempNewPath);
+				_tprintf(_T("'%s' not copied to current directory.\n"), threadData.newFilePath);
 				printError(_T("CopyFileEx"));
 			}
 		}
 		else if (it->fileType == FILETYPEDIRECTORY)
 		{
 			// Create Directory
+			StringCchCopy(threadData.filePath, MAX_PATH, it->filePath);
+			CovertPathToNewPath(threadData.filePath, recoveryPath, restoredPath, threadData.newFilePath);
+			retVal = CreateDirectoryEx(it->filePath, threadData.newFilePath, NULL);
+			if (retVal != 0) {
+				_tprintf(_T("'%s' copied directory.\n"), threadData.newFilePath);
+				_ftprintf(logFile, _T("%s %c"), it->filePath, LOG_PROGRESS_BRACKET_START_CHAR);
+				for (int i = 0; i < LOG_PROGRESS_LENGTH; i++)
+				{
+					_ftprintf(logFile, _T("%c"), LOG_PROGRESS_BAR_CHAR);
+				}
+				_ftprintf(logFile, _T("%c\n"), LOG_PROGRESS_BRACKET_END_CHAR);
+				fflush(logFile);
+			}
+			else {
+				_tprintf(_T("'%s' not copied directory.\n"), threadData.newFilePath);
+				printError(_T("CreateDirectoryEx"));
+			}
 		}
 	}
-	return true;
-}
 
-DWORD CALLBACK  CopyProgressRoutine(
-	LARGE_INTEGER TotalFileSize,
-	LARGE_INTEGER TotalBytesTransferred,
-	LARGE_INTEGER StreamSize,
-	LARGE_INTEGER StreamBytesTransferred,
-	DWORD dwStreamNumber,
-	DWORD dwCallbackReason,
-	HANDLE hSourceFile,
-	HANDLE hDestinationFile,
-	LPVOID lpData
-	)
-{
-	PCopyFileThreadCallbackStruct callbackData = (PCopyFileThreadCallbackStruct)lpData;
-
-	if (callbackData->TotalBytesTransferred.QuadPart != TotalBytesTransferred.QuadPart)
+	if (logFile != NULL)
 	{
-		callbackData->LastTotalBytesTransferred = callbackData->TotalBytesTransferred;
-		callbackData->TotalBytesTransferred = TotalBytesTransferred;
-		callbackData->dwCallbackReason = dwCallbackReason;
-		callbackData->TotalFileSize = TotalFileSize;
-
-		// Signal to main thread that bytes transferred changed
-		// Progress made
-		callbackData->callbackState = 1;
+		fclose(logFile);
 	}
 
-	int percentage = (double(TotalBytesTransferred.QuadPart) / double(TotalFileSize.QuadPart)) * 100;
-
-	printf("%%%d copied\n", percentage);
-
-	return PROGRESS_CONTINUE;
+	return true;
 }
 
 /*
@@ -568,6 +889,8 @@ BOOL CompareVolumeInfo(VolumeInfoStruct* volumeInfo1, VolumeInfoStruct* volumeIn
 			return 1 << 7;
 		}
 	}
+
+	return 0;
 }
 
 /*
@@ -648,25 +971,7 @@ BOOL IsPathModifier(_TCHAR* filename)
 	return false;
 }
 
-/*
-* Description: Returns position of the end of str2 in str1.
-*/
-int StringEndPosition(_TCHAR *str1, _TCHAR* str2)
-{
-	int index = 0;
-	int offset = 0;
 
-	while (str1[index+offset] != str2[index] && str1[index + offset] != 0 && str2[index] != 0)
-	{
-		offset++;
-	}
-
-	while (str1[index + offset] == str2[index] && str1[index + offset] != 0 && str2[index] != 0)
-	{
-		index++;
-	}
-	return index;
-}
 
 /*
 * Description: Returns the top level directory in path.
@@ -708,7 +1013,7 @@ BOOL StringGetDirectoryName(_TCHAR* dest, size_t destSize, _TCHAR* path)
 	// At this point dest should contain the full path of the top level folder.
 	// either with a trailing '\\' or not.
 	// Sample: C:\somefolder\test\ or C:\somefolder\test or C:\ 
-	for (int i = 0; i < destSize && dest[i] != '\0'; i++)
+	for (size_t i = 0; i < destSize && dest[i] != '\0'; i++)
 	{
 		if (dest[i]=='\\')
 		{
@@ -726,7 +1031,7 @@ BOOL StringGetDirectoryName(_TCHAR* dest, size_t destSize, _TCHAR* path)
 
 	lastSlashPos++;
 
-	for (int i = 0; i < destSize && dest[i] != '\0'; i++)
+	for (size_t i = 0; i < destSize && dest[i] != '\0'; i++)
 	{
 		if (i <= (endOfName-lastSlashPos))
 		{
@@ -747,7 +1052,7 @@ BOOL StringGetDirectoryName(_TCHAR* dest, size_t destSize, _TCHAR* path)
 */
 BOOL CovertPathToNewPath(_TCHAR *path, _TCHAR *basePath, _TCHAR *newBasePath, _TCHAR *newPath)
 {
-	int index = 0;
+	size_t index = 0;
 	size_t topDirectory = 0;
 	size_t pathLen = 0;
 	index = StringEndPosition(path, basePath);
@@ -767,7 +1072,7 @@ BOOL CovertPathToNewPath(_TCHAR *path, _TCHAR *basePath, _TCHAR *newBasePath, _T
 		}
 		if (_tcscmp(basePath + 1, _T(":\\")) == 0 && topDirectory == 3)
 		{
-			StringCchPrintf(newPath, MAX_PATH, _T("%s\\root%c\\%s"), newBasePath, basePath[0], (path + index));
+			StringCchPrintf(newPath, MAX_PATH, _T("%s\\root%c\\%s\0"), newBasePath, basePath[0], (path + index));
 			return true;
 		}
 		if (basePath[topDirectory - 1] == '\\')
@@ -785,10 +1090,54 @@ BOOL CovertPathToNewPath(_TCHAR *path, _TCHAR *basePath, _TCHAR *newBasePath, _T
 		if (index != 0)
 		{
 			// copy Path[index] to Path[end] to end of newBasePath and store it in new Path
-			StringCchPrintf(newPath, MAX_PATH, _T("%s%s%s"), newBasePath, basePath+topDirectory, (path + index));
+			StringCchPrintf(newPath, MAX_PATH, _T("%s%s%s\0"), newBasePath, basePath+topDirectory, (path + index));
 			return true;
 		}
 	}
 
 	return false;
+}
+
+BOOL DirectoryExists(_TCHAR* path)
+{
+	BOOL retVal = 0;
+	DWORD fileAttributes = 0;
+
+	retVal = PathFileExists(path);
+
+	if (retVal != 1)
+	{
+		return retVal;
+	}
+
+	fileAttributes = GetFileAttributes(path);
+
+	if ((fileAttributes&FILE_ATTRIBUTE_DIRECTORY) == FILE_ATTRIBUTE_DIRECTORY)
+	{
+		return 1;
+	}
+
+	return 0;
+}
+
+BOOL FileExists(_TCHAR* path)
+{
+	BOOL retVal = 0;
+	DWORD fileAttributes = 0;
+
+	retVal = PathFileExists(path);
+
+	if (retVal != 1)
+	{
+		return retVal;
+	}
+
+	fileAttributes = GetFileAttributes(path);
+
+	if ((fileAttributes&FILE_ATTRIBUTE_DIRECTORY) != FILE_ATTRIBUTE_DIRECTORY)
+	{
+		return 1;
+	}
+
+	return 0;
 }
