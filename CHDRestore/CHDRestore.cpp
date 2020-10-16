@@ -3,6 +3,7 @@
 
 #include "stdafx.h"
 
+#include "SystemUtilities.h"
 #include "StringUtilities.h"
 #include "FileManagement.h"
 #include "ErrorHandling.h"
@@ -12,6 +13,9 @@
 #include <windows.h>
 #include <strsafe.h>
 #include <list>
+
+#include <cstdlib>
+#include <signal.h>
 
 // Pass in (Recovery Drive, Restore BASEPATH,  RDrive path)
 
@@ -64,11 +68,12 @@ int _tmain(int argc, _TCHAR* argv[])
 
 		std::list<FileDataStruct> curFileList;
 
-		FindFilesInDirectory(recoveryPath, fileList);
-
 		std::list<FileDataStruct>::iterator beforeInsert;
 
 		FileDataStruct baseDirectoryData;
+
+		// Register signal and signal handler
+		signal(SIGINT, signal_callback_handler);
 
 		StringCopyExcept(recoveryDrive, MAX_DRIVE, _T('"'), argv[1]);
 		StringCopyExcept(restoredPath, MAX_PATH, _T('"'), argv[2]);
@@ -91,6 +96,8 @@ int _tmain(int argc, _TCHAR* argv[])
 		
 		baseDirectoryData.fileType = FILETYPEDIRECTORY;
 		StringCchCopy(baseDirectoryData.filePath, MAX_PATH, recoveryPath);
+
+		FindFilesInDirectory(recoveryPath, fileList);
 
 		//CovertPathToNewPath(recoveryPath, recoveryPath, restoredPath, baseDirectoryData.filePath);
 
@@ -115,6 +122,11 @@ int _tmain(int argc, _TCHAR* argv[])
 				it = beforeInsert;
 				it++;
 				_tprintf(_T("%s: %s\n"), it->fileType == FILETYPEFILE ? _T("File") : _T("Directory"), it->filePath);
+			}
+			if (is_process_terminated() == SIGINT)
+			{
+				_tprintf(_T("Received Terminate Signal Main function Exit!\n"));
+				break;
 			}
 
 		}

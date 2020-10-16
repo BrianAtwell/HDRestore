@@ -5,6 +5,7 @@
 
 #include "stdafx.h"
 
+#include "SystemUtilities.h"
 #include"FileManagement.h"
 #include "StringUtilities.h"
 
@@ -17,6 +18,8 @@
 #include <list>
 #include <ctime>
 #include <shlwapi.h>
+#include <cstdlib>
+#include <signal.h>
 
 const FileDataStruct FileDataNULL = {_T("NULL"), FILETYPENULL};
 BOOL CompareVolumeInfo(VolumeInfoStruct* volumeInfo1, VolumeInfoStruct* volumeInfo2);
@@ -83,6 +86,7 @@ DWORD WINAPI FindFileThreadedFunction(LPVOID lpParam) {
 			threadData->retVal = GetLastError();
 			if (threadData->retVal != ERROR_NO_MORE_FILES)
 			{
+				_tprintf(_T("Failed FindFirstFile path: %s\n"), threadData->szDir);
 				printError(TEXT("FindFileThreadedFunction:FindFirstFile"), threadData->retVal);
 			}
 			return threadData->retVal;
@@ -159,6 +163,11 @@ DWORD FindFileThreadHandler(PFindFileThreadStruct pThreadData) {
 		if (dwWait != WAIT_TIMEOUT)
 		{
 			hasThreadCompleted = true;
+			break;
+		}
+		if (is_process_terminated() == SIGINT)
+		{
+			_tprintf(_T("Received Terminate Signal FindFileThreadHandler function Exit!\n"));
 			break;
 		}
 		Sleep(FINDFILE_THREAD_SLEEP);
@@ -423,6 +432,11 @@ BOOL CopyFileThreadHandler(PCopyFileThreadStruct pThreadData)
 		if (dwWait != WAIT_TIMEOUT)
 		{
 			hasThreadCompleted = true;
+			break;
+		}
+		if (is_process_terminated() == SIGINT)
+		{
+			_tprintf(_T("Received Terminate Signal CopyFileThreadHandler While Loop function Exit!\n"));
 			break;
 		}
 		Sleep(FINDFILE_THREAD_SLEEP);
@@ -792,6 +806,12 @@ BOOL CopyAllFiles(_TCHAR* recoveryDrive, _TCHAR *recoveryPath, _TCHAR *restoredP
 				_tprintf(_T("'%s' not copied directory.\n"), threadData.newFilePath);
 				printError(_T("CreateDirectoryEx"));
 			}
+		}
+
+		if (is_process_terminated() == SIGINT)
+		{
+			_tprintf(_T("Received Terminate Signal CopyAllFiles For Loop function Exit!\n"));
+			break;
 		}
 	}
 
